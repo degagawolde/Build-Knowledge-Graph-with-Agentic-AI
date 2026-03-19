@@ -1,0 +1,6 @@
+google-adk==1.5.0
+neo4j==5.28.1
+litellm==1.73.6
+neo4j-graphrag==1.8.0
+rapidfuzz==3.13.0
+ipykernel==6.30.0

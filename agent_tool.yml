@@ -1,0 +1,53 @@
+import yaml
+from typing import List, Dict, Any
+from google.adk.tools import FunctionTool # As per your imports
+
+# --- 1. Consolidate Tools into a Lookup Dictionary ---
+# This allows the factory to find the function by the string name in the YAML
+tool_lookup = {
+    "get_approved_user_goal": get_approved_user_goal,
+    "set_perceived_user_goal": set_perceived_user_goal,
+    "approve_perceived_user_goal": approve_perceived_user_goal,
+    "list_available_files": list_available_files,
+    "sample_file": sample_file,
+    "set_suggested_files": set_suggested_files,
+    "get_suggested_files": get_suggested_files,
+    "approve_suggested_files": approve_suggested_files,
+    "get_approved_files": get_approved_files,
+    # Add any NER-specific tools here
+}
+
+def initialize_agents(config_path: str, model_instance):
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    instantiated_agents = {}
+
+    for agent_cfg in config['agents']:
+        # 1. Map tool names from YAML to actual FunctionTool objects
+        agent_tools = []
+        for tool_name in agent_cfg.get('tools', []):
+            if tool_name in tool_lookup:
+                func = tool_lookup[tool_name]
+                # Wrapping the function in the SDK's Tool wrapper
+                agent_tools.append(FunctionTool.from_function(func))
+        
+        # 2. Instantiate the Agent
+        # Note: We combine Role + Instructions for a "complete" prompt
+        full_instruction = f"{agent_cfg['role']}\n\n{agent_cfg['instructions']}"
+        
+        new_agent = Agent(
+            name=agent_cfg['name'],
+            model=model_instance,
+            description=agent_cfg['description'],
+            instruction=full_instruction,
+            tools=agent_tools
+        )
+        
+        instantiated_agents[agent_cfg['name']] = new_agent
+        print(f"✅ Created Agent: {agent_cfg['name']} with {len(agent_tools)} tools.")
+
+    return instantiated_agents
+
+# --- 2. Execution ---
+# agents = initialize_agents('agents.yaml', llm)
