@@ -159,7 +159,7 @@ async def main():
 
     # --- PHASE 5: FINAL CONSTRUCTION (STRUCTURED LOAD) ---
     if "approved_construction_plan" in shared_state:
-        print("\n🏗️ Building Structured Knowledge Graph in Neo4j...")
+        print("\n Building Structured Knowledge Graph in Neo4j...")
         build_tools = [tools.execute_node_load, tools.execute_relationship_load, tools.neo4j_is_ready, tools.clear_neo4j_data]
         build_agent = create_agent(configs['graph_builder_agent'], build_tools)
         build_caller = await make_agent_caller(build_agent, initial_state=shared_state)
