@@ -1,53 +1,92 @@
 import yaml
+import logging
 from typing import List, Dict, Any
-from google.adk.tools import FunctionTool # As per your imports
+from google.adk.tools import FunctionTool
+from google.adk.agents import Agent
 
-# --- 1. Consolidate Tools into a Lookup Dictionary ---
-# This allows the factory to find the function by the string name in the YAML
+# Setup logging to catch configuration issues early
+logger = logging.getLogger(__name__)
+
+# --- 1. Comprehensive Tool Mapping ---
+# Ensure all tools from your previous snippets are registered here
 tool_lookup = {
+    # Goal Tools
     "get_approved_user_goal": get_approved_user_goal,
     "set_perceived_user_goal": set_perceived_user_goal,
     "approve_perceived_user_goal": approve_perceived_user_goal,
+    
+    # File Tools
     "list_available_files": list_available_files,
     "sample_file": sample_file,
+    "search_file": search_file,
     "set_suggested_files": set_suggested_files,
     "get_suggested_files": get_suggested_files,
     "approve_suggested_files": approve_suggested_files,
     "get_approved_files": get_approved_files,
-    # Add any NER-specific tools here
+    
+    # NER & Fact Tools
+    "get_well_known_types": get_well_known_types,
+    "set_proposed_entities": set_proposed_entities,
+    "approve_proposed_entities": approve_proposed_entities,
+    "get_approved_entities": get_approved_entities,
+    "add_proposed_fact": add_proposed_fact,
+    "get_proposed_facts": get_proposed_facts,
+    "approve_proposed_facts": approve_proposed_facts,
+    
+    # Proposal Tools
+    "propose_node_construction": propose_node_construction,
+    "propose_relationship_construction": propose_relationship_construction,
+    "get_proposed_construction_plan": get_proposed_construction_plan,
 }
 
-def initialize_agents(config_path: str, model_instance):
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    
+def initialize_agents(config_path: str, model_instance) -> Dict[str, Agent]:
+    """
+    Loads agent configurations from YAML and instantiates ADK Agent objects.
+    """
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error(f"Config file not found at {config_path}")
+        return {}
+
     instantiated_agents = {}
 
-    for agent_cfg in config['agents']:
-        # 1. Map tool names from YAML to actual FunctionTool objects
+    for agent_cfg in config.get('agents', []):
+        agent_name = agent_cfg.get('name', 'Unknown Agent')
+        
+        # 1. Tool Mapping with Validation
         agent_tools = []
         for tool_name in agent_cfg.get('tools', []):
             if tool_name in tool_lookup:
                 func = tool_lookup[tool_name]
-                # Wrapping the function in the SDK's Tool wrapper
+                # Wrapping as a FunctionTool for the ADK
                 agent_tools.append(FunctionTool.from_function(func))
+            else:
+                logger.warning(f"⚠️ Tool '{tool_name}' requested by {agent_name} not found in tool_lookup.")
+
+        # 2. Dynamic Instruction Building
+        # We preserve the structure of Role -> Goal -> Instructions for the LLM context
+        role = agent_cfg.get('role', '')
+        goal = agent_cfg.get('goal', '')
+        raw_instructions = agent_cfg.get('instructions', '')
         
-        # 2. Instantiate the Agent
-        # Note: We combine Role + Instructions for a "complete" prompt
-        full_instruction = f"{agent_cfg['role']}\n\n{agent_cfg['instructions']}"
-        
-        new_agent = Agent(
-            name=agent_cfg['name'],
-            model=model_instance,
-            description=agent_cfg['description'],
-            instruction=full_instruction,
-            tools=agent_tools
-        )
-        
-        instantiated_agents[agent_cfg['name']] = new_agent
-        print(f"✅ Created Agent: {agent_cfg['name']} with {len(agent_tools)} tools.")
+        full_instruction = f"ROLE:\n{role}\n\nGOAL:\n{goal}\n\nINSTRUCTIONS:\n{raw_instructions}"
+
+        # 3. Agent Creation
+        try:
+            new_agent = Agent(
+                name=agent_name,
+                model=model_instance,
+                description=agent_cfg.get('description', ''),
+                instruction=full_instruction,
+                tools=agent_tools
+            )
+            
+            instantiated_agents[agent_name] = new_agent
+            print(f"✅ Created Agent: {agent_name:.<30} Tools: {len(agent_tools)}")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create agent {agent_name}: {e}")
 
     return instantiated_agents
-
-# --- 2. Execution ---
-# agents = initialize_agents('agents.yaml', llm)
