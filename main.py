@@ -77,7 +77,7 @@ async def process_structured_data(configs, shared_state):
     # Setup LoopAgent (Actor-Critic)
     proposal_agent = create_agent(configs['proposal_agent'], [
         tools.get_approved_user_goal,
-        tools.list_available_files,
+        tools.get_approved_files,
         tools.sample_file,
         tools.search_file,
         tools.propose_node_construction,
@@ -100,6 +100,8 @@ async def process_structured_data(configs, shared_state):
         agent_tool.AgentTool(refinement_loop),
         tools.get_proposed_construction_plan,
         tools.approve_proposed_construction_plan,
+        tools.remove_node_construction, 
+        tools.remove_relationship_construction,
         tools.finished
     ])
 
