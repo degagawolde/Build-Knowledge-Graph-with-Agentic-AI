@@ -1,3 +1,4 @@
+# main.py
 import asyncio
 import yaml
 import logging
@@ -7,15 +8,15 @@ from google.adk.tools import agent_tool
 
 # Local Module Imports
 from helper import make_agent_caller, load_env
-import tools 
+import tools
 
 # Setup
 warnings.filterwarnings("ignore")
-logging.basicConfig(level=logging.CRITICAL)
+logging.basicConfig(level=logging.ERROR)  # Reduced noise
 LLM_MODEL = 'gemini-3-flash-preview'
 
 # ==========================================
-# 1. CONFIGURATION & FACTORY
+# 1. CORE UTILITIES
 # ==========================================
 def load_agent_configs(filepath):
     with open(filepath, 'r') as f:
@@ -23,150 +24,211 @@ def load_agent_configs(filepath):
     return {agent['name']: agent for agent in data['agents']}
 
 def create_agent(config, tool_list, name_override=None):
-    """Instantiate an Agent object from YAML config."""
     name = name_override or config['name']
     instruction = f"{config['role']}\n\n{config['instructions']}"
     return Agent(
-        name=name,
-        model=LLM_MODEL,
+        name=name, model=LLM_MODEL,
         description=config.get('description', ''),
-        instruction=instruction,
-        tools=tool_list
+        instruction=instruction, tools=tool_list
     )
 
 # ==========================================
-# 2. SUB-GRAPH BUILDER (LoopAgent Setup)
+# 2. INTERACTIVE ENGINE (WITH BACKTRACKING)
 # ==========================================
-def setup_refinement_loop(configs):
+async def run_phase(caller, phase_name, completion_key):
+    """
+    Handles user interaction.
+    Returns:
+      - True: Phase complete
+      - False: User wants to exit
+      - "BACK": User wants to return to previous phase
+    """
+    print(f"\n{'='*40}\n ENTERING PHASE: {phase_name} \n{'='*40}")
+    print(" (Type 'back' to go to previous step, 'exit' to quit)")
+
+    while True:
+        user_input = input(f"👤 [{phase_name}] You: ").strip()
+        if not user_input:
+            continue
+
+        low_input = user_input.lower()
+        if low_input in ['exit', 'quit']:
+            return False
+        if low_input == 'back':
+            return "BACK"
+
+        try:
+            await caller.call(user_input)
+            session = await caller.get_session()
+            if completion_key in session.state:
+                print(f"✅ {phase_name} verified.")
+                return True
+        except Exception as e:
+            print(f"❌ Error in {phase_name}: {e}")
+
+# ==========================================
+# 3. PHASE-SPECIFIC LOGIC
+# ==========================================
+
+async def process_structured_data(configs, shared_state):
+    """Handles CSV/JSON to Graph transformation."""
+    print("\n📊 Starting Structured Data Pipeline...")
+
+    # Setup LoopAgent (Actor-Critic)
     proposal_agent = create_agent(configs['proposal_agent'], [
-        tools.sample_file, tools.search_file, 
-        tools.propose_node_construction, tools.propose_relationship_construction,
-        tools.remove_node_construction, tools.remove_relationship_construction,
-        tools.get_approved_user_goal, tools.get_approved_files
+        tools.get_approved_user_goal,
+        tools.list_available_files,
+        tools.sample_file,
+        tools.search_file,
+        tools.propose_node_construction,
+        tools.propose_relationship_construction,
+        tools.get_proposed_construction_plan
     ])
-
     critic_agent = create_agent(configs['schema_critic_agent'], [
-        tools.get_approved_user_goal, tools.get_approved_files,
-        tools.get_proposed_construction_plan, tools.sample_file, tools.search_file
+        tools.get_approved_user_goal,
+        tools.get_approved_files,
+        tools.get_proposed_construction_plan,
+        tools.sample_file,
+        tools.search_file
     ])
-
-    return LoopAgent(
-        name="schema_refinement_loop",
-        description="Analyzes approved files to propose a schema based on user intent and feedback.",
-        max_iterations=3, 
+    refinement_loop = LoopAgent(
+        name="refinement_loop", max_iterations=3,
         sub_agents=[proposal_agent, critic_agent]
     )
 
-# ==========================================
-# 3. INTERACTIVE ENGINE
-# ==========================================
-async def run_interactive_phase(caller, phase_name, completion_key):
-    print(f"\n{'='*40}\n PHASE: {phase_name} \n{'='*40}")
-    
-    while True:
-        user_input = input("👤 You: ").strip()
-        if not user_input: continue
-        if user_input.lower() in ['exit', 'quit']: return False
-        
-        await caller.call(user_input)
-        
-        session = await caller.get_session()
-        if completion_key in session.state:
-            print(f"\n✅ {phase_name} complete!")
-            return True
+    coordinator_agent = create_agent(configs['schema_proposal_coordinator'], [
+        agent_tool.AgentTool(refinement_loop),
+        tools.get_proposed_construction_plan,
+        tools.approve_proposed_construction_plan,
+        tools.finished
+    ])
+
+    caller = await make_agent_caller(coordinator_agent, initial_state=shared_state)
+    await caller.call("Generate a graph schema for these files.")
+    result = await run_phase(caller, "STRUCTURED SCHEMA", "approved_construction_plan")
+
+    if result is True:
+        # Final Construction
+        build_agent = create_agent(configs['graph_builder_agent'], [
+            tools.get_approved_construction_plan,
+            tools.execute_node_load,
+            tools.execute_relationship_load,
+            tools.drop_neo4j_schema,
+            tools.clear_database,
+            tools.neo4j_is_ready
+        ])
+        build_caller = await make_agent_caller(build_agent, initial_state=(await caller.get_session()).state)
+        await build_caller.call("Execute the data migration now.")
+        await run_phase(build_caller, "MIGRATION", "migration_complete")
+
+# main.py additions
+
+async def process_unstructured_data(configs, shared_state):
+    """Handles NER and NLP extraction via sequential Agent coordination."""
+    print("\n📝 Starting NLP Pipeline...")
+
+    # 1. Entity Recognition Phase
+    ner_agent = create_agent(configs['ner_schema_agent_v1'], [
+        tools.get_well_known_types,
+        tools.get_approved_user_goal,
+        tools.get_approved_files,
+        tools.sample_file,
+        tools.set_proposed_entities,
+        tools.approve_proposed_entities
+    ])
+    ner_caller = await make_agent_caller(ner_agent, initial_state=shared_state)
+    await ner_caller.call("Analyze the text files and propose entity types.")
+    if not await run_phase(ner_caller, "ENTITY DISCOVERY", "approved_entity_types"):
+        return
+
+    # 2. Fact/Relationship Extraction Phase
+    shared_state = (await ner_caller.get_session()).state
+    fact_agent = create_agent(configs['fact_type_extraction_agent_v1'], [
+        tools.get_approved_user_goal,
+        tools.get_approved_files,
+        tools.sample_file,
+        tools.get_proposed_facts,
+        tools.get_approved_entities,
+        tools.add_proposed_fact,
+        tools.approve_proposed_facts
+    ])
+    fact_caller = await make_agent_caller(fact_agent, initial_state=shared_state)
+    await fact_caller.call("Based on the approved entities, what relationships exist in the text?")
+    if not await run_phase(fact_caller, "FACT DISCOVERY", "approved_fact_types"):
+        return
+
+    # 3. Final Execution
+    worker_agent = create_agent(configs['text_extraction_worker'], [
+        tools.execute_text_to_graph_load,
+        tools.get_approved_facts,
+        tools.get_approved_files,
+        tools.sample_file
+    ])
+    worker_caller = await make_agent_caller(worker_agent, initial_state=(await fact_caller.get_session()).state)
+    await worker_caller.call("Extract the triples and load them into Neo4j.")
 
 # ==========================================
-# 4. MAIN ORCHESTRATION PIPELINE
+# 4. MAIN ORCHESTRATOR
 # ==========================================
 async def main():
     load_env()
     configs = load_agent_configs('agents.yml')
     shared_state = {}
+    history = []  # Stack for backtracking
 
-    # --- PHASE 1: USER INTENT ---
-    intent_tools = [tools.set_perceived_user_goal, tools.approve_perceived_user_goal]
-    intent_agent = create_agent(configs['user_intent_agent'], intent_tools)
-    intent_caller = await make_agent_caller(intent_agent, initial_state=shared_state)
-    if not await run_interactive_phase(intent_caller, "USER INTENT", "approved_user_goal"): return
-    shared_state = (await intent_caller.get_session()).state
+    # List of phases to iterate through
+    # Format: (Display Name, State Key, Agent Config, Tools)
+    pipeline_definition = [
+        ("USER INTENT", "approved_user_goal", 'user_intent_agent',
+         [
+             tools.set_perceived_user_goal, 
+             tools.approve_perceived_user_goal]),
 
-    # --- PHASE 2: FILE SELECTION ---
-    file_tools = [tools.get_approved_user_goal, tools.list_available_files, tools.sample_file, 
-                  tools.set_suggested_files, tools.get_suggested_files, tools.approve_suggested_files]
-    file_agent = create_agent(configs['file_suggestion_agent'], file_tools)
-    file_caller = await make_agent_caller(file_agent, initial_state=shared_state)
-    await file_caller.call("Start by listing available files and suggesting the best ones.")
-    if not await run_interactive_phase(file_caller, "FILE SELECTION", "approved_files"): return
-    shared_state = (await file_caller.get_session()).state
+        ("FILE SELECTION", "approved_files", 'file_suggestion_agent',
+         [
+             tools.get_approved_user_goal,
+             tools.list_available_files, 
+             tools.sample_file, 
+             tools.set_suggested_files, 
+             tools.get_suggested_files,
+             tools.approve_suggested_files
+             ])
+    ]
 
-    # --- ROUTING LOGIC ---
+    current_idx = 0
+    while current_idx < len(pipeline_definition):
+        name, key, cfg_key, t_list = pipeline_definition[current_idx]
+
+        agent = create_agent(configs[cfg_key], t_list)
+        caller = await make_agent_caller(agent, initial_state=shared_state)
+
+        result = await run_phase(caller, name, key)
+
+        if result == "BACK":
+            current_idx = max(0, current_idx - 1)
+            continue
+        elif result is False:
+            print("👋 Exiting...")
+            return
+
+        # Advance
+        shared_state = (await caller.get_session()).state
+        current_idx += 1
+
+    # --- PARALLEL EXECUTION BRANCH ---
     approved_files = shared_state.get("approved_files", [])
-    has_structured = any(f.endswith(('.csv', '.json', '.xlsx')) for f in approved_files)
-    has_unstructured = any(f.endswith(('.txt', '.md')) for f in approved_files)
+    tasks = []
 
-    # --- PHASE 3: STRUCTURED SCHEMA PROPOSAL ---
-    if has_structured:
-        print("\n📊 Starting Coordinated Schema Proposal...")
-        refinement_loop = setup_refinement_loop(configs)
-        refinement_loop_tool = agent_tool.AgentTool(refinement_loop)
+    if any(f.endswith(('.csv', '.json')) for f in approved_files):
+        tasks.append(process_structured_data(configs, shared_state))
 
-        coordinator_tools = [
-            refinement_loop_tool,
-            tools.get_proposed_construction_plan,
-            tools.approve_proposed_construction_plan,
-            tools.get_approved_user_goal,
-            tools.get_approved_files,
-            tools.finished
-        ]
-        coordinator_agent = create_agent(configs['schema_proposal_coordinator'], coordinator_tools)
-        coord_caller = await make_agent_caller(coordinator_agent, initial_state=shared_state)
-        
-        await coord_caller.call("How can these approved files be imported into our graph?")
-        if not await run_interactive_phase(coord_caller, "STRUCTURED SCHEMA COORDINATION", "approved_construction_plan"): return
-        shared_state = (await coord_caller.get_session()).state
+    if any(f.endswith(('.txt', '.md')) for f in approved_files):
+        tasks.append(process_unstructured_data(configs, shared_state))
 
-    # --- PHASE 4: UNSTRUCTURED (NER & FACTS) ---
-    if has_unstructured:
-        print("\n📝 Detected Unstructured Data. Starting Extraction Schema Design...")
-        
-        # 4a. NER Schema
-        ner_tools = [tools.get_approved_user_goal, tools.get_approved_files, tools.sample_file, 
-                     tools.get_well_known_types, tools.set_proposed_entities, tools.approve_proposed_entities]
-        ner_agent = create_agent(configs['ner_schema_agent_v1'], ner_tools)
-        ner_caller = await make_agent_caller(ner_agent, initial_state=shared_state)
-        await ner_caller.call("Analyze the text files and propose entity types that match our goal.")
-        if not await run_interactive_phase(ner_caller, "UNSTRUCTURED: NER", "approved_entity_types"): return
-        shared_state = (await ner_caller.get_session()).state
+    if tasks:
+        await asyncio.gather(*tasks)
 
-        # 4b. Fact Type Schema
-        fact_tools = [tools.get_approved_user_goal, tools.get_approved_files, tools.get_approved_entities,
-                      tools.sample_file, tools.add_proposed_fact, tools.get_proposed_facts, tools.approve_proposed_facts]
-        fact_agent = create_agent(configs['fact_type_extraction_agent_v1'], fact_tools)
-        fact_caller = await make_agent_caller(fact_agent, initial_state=shared_state)
-        await fact_caller.call("Identify relevant relationship types (facts) between our entities.")
-        if not await run_interactive_phase(fact_caller, "UNSTRUCTURED: FACTS", "approved_fact_types"): return
-        shared_state = (await fact_caller.get_session()).state
-
-        # 4c. NLP Extraction Execution
-        print("\n🧠 Running NLP Extraction Worker...")
-        extract_tools = [tools.get_approved_entities, tools.get_approved_facts, tools.get_approved_files, 
-                         tools.sample_file, tools.execute_text_to_graph_load]
-        extract_agent = create_agent(configs['text_extraction_worker'], extract_tools)
-        extract_caller = await make_agent_caller(extract_agent, initial_state=shared_state)
-        await extract_caller.call("Extract instances of entities and facts from text files and load them into Neo4j.")
-        if not await run_interactive_phase(extract_caller, "UNSTRUCTURED: NLP EXTRACTION", "extraction_complete"): return
-        shared_state = (await extract_caller.get_session()).state
-
-    # --- PHASE 5: FINAL CONSTRUCTION (STRUCTURED LOAD) ---
-    if "approved_construction_plan" in shared_state:
-        print("\n Building Structured Knowledge Graph in Neo4j...")
-        build_tools = [tools.execute_node_load, tools.execute_relationship_load, tools.neo4j_is_ready, tools.clear_neo4j_data]
-        build_agent = create_agent(configs['graph_builder_agent'], build_tools)
-        build_caller = await make_agent_caller(build_agent, initial_state=shared_state)
-        await build_caller.call("The structured schema is approved. Execute the data migration now.")
-        await run_interactive_phase(build_caller, "STRUCTURED MIGRATION", "migration_complete")
-
-    print("\n🚀 All processing branches complete. Knowledge Graph is live.")
+    print("\n🚀 Knowledge Graph Deployment Complete.")
 
 if __name__ == "__main__":
     asyncio.run(main())

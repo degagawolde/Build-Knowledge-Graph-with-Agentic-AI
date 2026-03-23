@@ -1,11 +1,16 @@
+# tools.py
+"""
+Tools for building knowledge graphs from structured and unstructured data.
+Includes state management, file operations, Neo4j interactions, and schema construction.
+"""
+
 from pathlib import Path
 from itertools import islice
 from typing import List, Dict, Any
 
 from google.adk.tools import ToolContext
 from neo4j_for_adk import tool_success, tool_error, graphdb
-from helper import get_neo4j_import_dir  
-from google.adk.tools import ToolContext
+from helper import get_neo4j_import_dir, sanitize_name
 
 # =========================
 # STATE KEYS
@@ -26,8 +31,9 @@ APPROVED_FACTS = "approved_fact_types"
 SEARCH_RESULTS = "search_results"
 
 # =========================
-# HELPERS
+# HELPER FUNCTIONS
 # =========================
+
 def get_import_dir() -> Path:
     """Get Neo4j import directory safely."""
     try:
@@ -35,36 +41,28 @@ def get_import_dir() -> Path:
     except Exception as e:
         raise RuntimeError(f"Failed to get import directory: {e}")
 
-
 def validate_relative_path(file_path: str) -> Path:
-    """Ensure file path is relative."""
+    """Ensure file path is relative to import directory."""
     path = Path(file_path)
     if path.is_absolute():
         raise ValueError("File path must be relative to import directory.")
     return path
-
 
 def read_file_sample(full_path: Path, max_lines: int = 100) -> str:
     """Read limited number of lines from file."""
     with open(full_path, "r", encoding="utf-8") as f:
         return "".join(islice(f, max_lines))
 
-
 # =========================
 # GOAL MANAGEMENT
 # =========================
-def get_approved_user_goal(tool_context: ToolContext):
-    goal = tool_context.state.get(APPROVED_GOAL_KEY)
-    if not goal:
-        return tool_error("No approved goal found.")
-    return tool_success(APPROVED_GOAL_KEY, goal)
-
 
 def set_perceived_user_goal(
     kind_of_graph: str,
     graph_description: str,
     tool_context: ToolContext,
 ):
+    """Record the user's initial goal."""
     goal_data = {
         "kind_of_graph": kind_of_graph,
         "graph_description": graph_description,
@@ -72,20 +70,27 @@ def set_perceived_user_goal(
     tool_context.state[PERCEIVED_GOAL_KEY] = goal_data
     return tool_success(PERCEIVED_GOAL_KEY, goal_data)
 
-
 def approve_perceived_user_goal(tool_context: ToolContext):
+    """Approve the perceived goal, making it the official goal."""
     perceived = tool_context.state.get(PERCEIVED_GOAL_KEY)
     if not perceived:
         return tool_error("No perceived goal found.")
     tool_context.state[APPROVED_GOAL_KEY] = perceived
     return tool_success(APPROVED_GOAL_KEY, perceived)
 
+def get_approved_user_goal(tool_context: ToolContext):
+    """Retrieve the approved goal."""
+    goal = tool_context.state.get(APPROVED_GOAL_KEY)
+    if not goal:
+        return tool_error("No approved goal found.")
+    return tool_success(APPROVED_GOAL_KEY, goal)
 
 # =========================
-# FILE DISCOVERY
+# FILE DISCOVERY & SAMPLING
 # =========================
+
 def list_available_files(tool_context: ToolContext) -> Dict[str, Any]:
-    """List all files inside import directory."""
+    """List all files inside the Neo4j import directory."""
     try:
         import_dir = get_import_dir()
         file_names = [
@@ -98,10 +103,6 @@ def list_available_files(tool_context: ToolContext) -> Dict[str, Any]:
     except Exception as e:
         return tool_error(f"Failed to list files: {e}")
 
-
-# =========================
-# FILE SAMPLING
-# =========================
 def sample_file(file_path: str, tool_context: ToolContext) -> Dict[str, Any]:
     """Read up to 100 lines from a file."""
     try:
@@ -119,17 +120,18 @@ def sample_file(file_path: str, tool_context: ToolContext) -> Dict[str, Any]:
     except Exception as e:
         return tool_error(f"Failed to read file: {e}")
 
-# ==========================================
-# 🔍 SEARCH & SAMPLING TOOLS
-# ==========================================
-
 def search_file(file_path: str, query: str) -> dict:
     """Searches any text file (csv, txt, md) for lines containing the query."""
-    import_dir = Path(get_neo4j_import_dir())
+    import_dir = get_import_dir()
     p = import_dir / file_path
 
-    if not p.exists(): return tool_error(f"File does not exist: {file_path}")
-    if not query: return tool_success(SEARCH_RESULTS, {"matching_lines": [], "metadata": {"lines_found": 0}})
+    if not p.exists():
+        return tool_error(f"File does not exist: {file_path}")
+    if not query:
+        return tool_success(SEARCH_RESULTS, {
+            "metadata": {"path": file_path, "query": query, "lines_found": 0},
+            "matching_lines": []
+        })
 
     matching_lines = []
     try:
@@ -148,147 +150,47 @@ def search_file(file_path: str, query: str) -> dict:
 # =========================
 # FILE SELECTION FLOW
 # =========================
+
 def set_suggested_files(suggested_files: List[str], tool_context: ToolContext) -> Dict[str, Any]:
+    """Store the list of files suggested by the agent."""
     tool_context.state[SUGGESTED_FILES] = suggested_files
     return tool_success(SUGGESTED_FILES, suggested_files)
 
-
 def get_suggested_files(tool_context: ToolContext) -> Dict[str, Any]:
+    """Retrieve the list of suggested files."""
     files = tool_context.state.get(SUGGESTED_FILES)
     if not files:
         return tool_error("No suggested files found.")
     return tool_success(SUGGESTED_FILES, files)
 
-
 def approve_suggested_files(tool_context: ToolContext) -> Dict[str, Any]:
+    """Approve the suggested files, making them the approved set."""
     suggested = tool_context.state.get(SUGGESTED_FILES)
     if not suggested:
         return tool_error("No suggested files to approve.")
     tool_context.state[APPROVED_FILES] = suggested
     return tool_success(APPROVED_FILES, suggested)
 
-
 def get_approved_files(tool_context: ToolContext) -> Dict[str, Any]:
+    """Retrieve the approved list of files."""
     approved = tool_context.state.get(APPROVED_FILES)
     if not approved:
         return tool_error("No approved files found.")
     return tool_success(APPROVED_FILES, approved)
 
-
 # =========================
-# NEO4J DATABASE TOOLS
+# STRUCTURED CONSTRUCTION TOOLS
 # =========================
-def neo4j_is_ready():
-    return graphdb.send_query("RETURN 'Neo4j is Ready!' as message")
 
-
-def drop_neo4j_indexes() -> Dict[str, Any]:
-    """Drops all constraints and indexes present on the neo4j graph database."""
-    # Remove constraints
-    list_constraints = graphdb.send_query("SHOW CONSTRAINTS YIELD name")
-    if list_constraints["status"] == "error":
-        return list_constraints
-    
-    for row in list_constraints["query_result"]:
-        name = row["name"]
-        graphdb.send_query(f"DROP CONSTRAINT `{name}`")
-
-    # Remove indexes
-    list_indexes = graphdb.send_query("SHOW INDEXES YIELD name")
-    if list_indexes["status"] == "error":
-        return list_indexes
-    
-    for row in list_indexes["name"]:
-        name = row["name"]
-        graphdb.send_query(f"DROP INDEX `{name}`")
-
-    return tool_success("message", "Neo4j constraints and indexes have been dropped.")
-
-
-def clear_neo4j_data() -> Dict[str, Any]:
-    """Clears all data from the neo4j graph database."""
-    query = "MATCH (n) CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 10000 ROWS"
-    data_removed = graphdb.send_query(query)
-    if data_removed["status"] == "error":
-        return data_removed
-    return tool_success("message", "Neo4j graph has been reset.")
-
-
-def get_apoc_procedure_names() -> Dict[str, Any]:
-    """List all APOC procedure names."""
-    cypher = "SHOW PROCEDURES YIELD name WHERE name STARTS WITH 'apoc' RETURN name"
-    result = graphdb.send_query(cypher)
-    if result["status"] == "error":
-        return result
-    
-    names = [row["name"] for row in result["query_result"]]
-    if not names:
-        return tool_error("APOC procedures not found.")
-    return tool_success("apoc_procedure_names", names)
-
-
-def get_apoc_version() -> Dict[str, Any]:
-    """Get the version of APOC installed."""
-    result = graphdb.send_query("RETURN apoc.version() AS apoc_version")
-    if result["status"] == "error":
-        return result
-    return tool_success("apoc_version", result["query_result"][0]["apoc_version"])
-
-
-def get_neo4j_version() -> Dict[str, Any]:
-    """Get the version and edition of the Neo4j database."""
-    cypher = "CALL dbms.components() yield name, versions, edition unwind versions as version return name, version, edition"
-    result = graphdb.send_query(cypher)
-    if result["status"] == "error":
-        return result
-    return tool_success("neo4j_version", result["query_result"][0])
-
-
-def create_uniqueness_constraint(label: str, unique_property_key: str) -> Dict[str, Any]:
-    """Creates a uniqueness constraint."""
-    constraint_name = f"{label}_{unique_property_key}_constraint"
-    query = f"CREATE CONSTRAINT `{constraint_name}` IF NOT EXISTS FOR (n:`{label}`) REQUIRE n.`{unique_property_key}` IS UNIQUE"
-    return graphdb.send_query(query)
-
-
-def load_nodes_from_csv(
-    source_file: str,
-    label: str,
+def propose_node_construction(
+    approved_file: str,
+    proposed_label: str,
     unique_column_name: str,
-    properties: list[str],
-) -> Dict[str, Any]:
-    """Batch loading of nodes from a CSV file."""
-    # Fixed formatting for dynamic labels
-    query = f"""
-    LOAD CSV WITH HEADERS FROM "file:///" + $source_file AS row
-    CALL (row) {{
-        MERGE (n:`{label}` {{ `{unique_column_name}` : row[$unique_column_name] }})
-        FOREACH (k IN $properties | SET n[k] = row[k])
-    }} IN TRANSACTIONS OF 1000 ROWS
-    """
-    return graphdb.send_query(query, {
-        "source_file": source_file,
-        "unique_column_name": unique_column_name,
-        "properties": properties
-    })
-
-def load_product_nodes() -> Dict[str, Any]:
-    """Load the product nodes from products.csv"""
-    return load_nodes_from_csv(
-        "products.csv",
-        "Product",
-        "product_id",
-        ["product_name", "price", "description"]
-    )
-
-
-# ==========================================
-# 🏗️ STRUCTURED CONSTRUCTION TOOLS
-# ==========================================
-
-def propose_node_construction(approved_file: str, proposed_label: str, unique_column_name: str, proposed_properties: list[str], tool_context: ToolContext) -> dict:
+    proposed_properties: list[str],
+    tool_context: ToolContext
+) -> dict:
     """Propose a node mapping for a structured file."""
-    # Safety Check: Does the column exist?
+    # Safety check: does the column exist?
     check = search_file(approved_file, unique_column_name)
     if check["status"] == "error" or check["search_results"]["metadata"]["lines_found"] == 0:
         return tool_error(f"{approved_file} is missing column '{unique_column_name}'. Check file content.")
@@ -304,7 +206,16 @@ def propose_node_construction(approved_file: str, proposed_label: str, unique_co
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = plan
     return tool_success("node_construction", plan[proposed_label])
 
-def propose_relationship_construction(approved_file: str, proposed_relationship_type: str, from_node_label: str, from_node_column: str, to_node_label: str, to_node_column: str, proposed_properties: list[str], tool_context: ToolContext) -> dict:
+def propose_relationship_construction(
+    approved_file: str,
+    proposed_relationship_type: str,
+    from_node_label: str,
+    from_node_column: str,
+    to_node_label: str,
+    to_node_column: str,
+    proposed_properties: list[str],
+    tool_context: ToolContext
+) -> dict:
     """Propose a relationship mapping for a structured file."""
     # Safety checks for both foreign key columns
     for col in [from_node_column, to_node_column]:
@@ -326,78 +237,30 @@ def propose_relationship_construction(approved_file: str, proposed_relationship_
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = plan
     return tool_success("relationship_construction", plan[proposed_relationship_type])
 
-def approve_proposed_construction_plan(tool_context: ToolContext):
-    plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
-    if not plan: return tool_error("No plan to approve.")
-    tool_context.state[APPROVED_CONSTRUCTION_PLAN] = plan
-    return tool_success(APPROVED_CONSTRUCTION_PLAN, plan)
-
-# ==========================================
-# 📝 UNSTRUCTURED EXTRACTION TOOLS
-# ==========================================
-
-def set_proposed_entities(proposed_entity_types: list[str], tool_context: ToolContext):
-    tool_context.state[PROPOSED_ENTITIES] = proposed_entity_types
-    return tool_success(PROPOSED_ENTITIES, proposed_entity_types)
-
-def approve_proposed_entities(tool_context: ToolContext):
-    ents = tool_context.state.get(PROPOSED_ENTITIES)
-    if not ents: return tool_error("No entities proposed.")
-    tool_context.state[APPROVED_ENTITIES] = ents
-    return tool_success(APPROVED_ENTITIES, ents)
-
-def add_proposed_fact(approved_subject_label: str, proposed_predicate_label: str, approved_object_label: str, tool_context: ToolContext):
-    approved_ents = tool_context.state.get(APPROVED_ENTITIES, [])
-    if approved_subject_label not in approved_ents or approved_object_label not in approved_ents:
-        return tool_error("Subject or Object label not in approved entities list.")
-
-    facts = tool_context.state.get(PROPOSED_FACTS, {})
-    facts[proposed_predicate_label] = {
-        "subject_label": approved_subject_label,
-        "predicate_label": proposed_predicate_label,
-        "object_label": approved_object_label
-    }
-    tool_context.state[PROPOSED_FACTS] = facts
-    return tool_success(PROPOSED_FACTS, facts)
-
-def approve_proposed_facts(tool_context: ToolContext):
-    facts = tool_context.state.get(PROPOSED_FACTS)
-    if not facts: return tool_error("No facts to approve.")
-    tool_context.state[APPROVED_FACTS] = facts
-    return tool_success(APPROVED_FACTS, facts)
-
-def get_well_known_types(tool_context: ToolContext):
-    """Bridge tool: pulls node labels from approved construction plan into extraction phase."""
-    plan = tool_context.state.get(APPROVED_CONSTRUCTION_PLAN, {})
-    labels = {v["label"] for v in plan.values() if v.get("construction_type") == "node"}
-    return tool_success("approved_labels", list(labels))
-
-# ==========================================
-# 🛠️ UTILITY GETTERS
-# ==========================================
-
 def get_proposed_construction_plan(tool_context: ToolContext):
+    """Retrieve the proposed construction plan."""
     plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
     if not plan:
         return tool_error("No proposed construction plan found.")
     return tool_success(PROPOSED_CONSTRUCTION_PLAN, plan)
 
-def get_approved_entities(tool_context: ToolContext):
-    approved_entities =  tool_context.state.get(APPROVED_ENTITIES, [])
-    if not approved_entities:
-        return tool_error("No approved entities found.")
-    return tool_success(APPROVED_ENTITIES, approved_entities)
+def approve_proposed_construction_plan(tool_context: ToolContext):
+    """Approve the proposed construction plan."""
+    plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
+    if not plan:
+        return tool_error("No plan to approve.")
+    tool_context.state[APPROVED_CONSTRUCTION_PLAN] = plan
+    return tool_success(APPROVED_CONSTRUCTION_PLAN, plan)
 
-def get_proposed_facts(tool_context: ToolContext):
-    proposed_facts = tool_context.state.get(PROPOSED_FACTS, {})
-    if not proposed_facts:
-        return tool_error("No proposed facts found.")
-    
-    return  tool_success(PROPOSED_FACTS,proposed_facts)
-
+def get_approved_construction_plan(tool_context: ToolContext):
+    """Retrieve the approved construction plan."""
+    plan = tool_context.state.get(APPROVED_CONSTRUCTION_PLAN)
+    if not plan:
+        return tool_error("No approved construction plan found.")
+    return tool_success(APPROVED_CONSTRUCTION_PLAN, plan)
 
 def remove_node_construction(label: str, tool_context: ToolContext):
-    """Removes a specific node mapping from the proposed plan."""
+    """Remove a specific node mapping from the proposed plan."""
     plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     if label in plan:
         del plan[label]
@@ -406,13 +269,40 @@ def remove_node_construction(label: str, tool_context: ToolContext):
     return tool_error(f"Node '{label}' not found in plan.")
 
 def remove_relationship_construction(rel_type: str, tool_context: ToolContext):
-    """Removes a specific relationship mapping from the proposed plan."""
+    """Remove a specific relationship mapping from the proposed plan."""
     plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     if rel_type in plan:
         del plan[rel_type]
         tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = plan
         return tool_success("message", f"Relationship '{rel_type}' removed from plan.")
     return tool_error(f"Relationship '{rel_type}' not found in plan.")
+
+# =========================
+# NEO4J LOADING
+# =========================
+
+def execute_node_load(
+    source_file: str,
+    label: str,
+    unique_column_name: str,
+    properties: List[str]
+) -> Dict[str, Any]:
+    """Load nodes from a CSV file, ensuring uniqueness constraint."""
+    safe_label = sanitize_name(label)
+    safe_key = sanitize_name(unique_column_name)
+
+    # Ensure constraint exists
+    graphdb.send_query(f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:`{safe_label}`) REQUIRE n.`{safe_key}` IS UNIQUE")
+
+    query = f"""
+    LOAD CSV WITH HEADERS FROM 'file:///' + $file AS row
+    CALL (row) {{
+        MERGE (n:`{safe_label}` {{ `{safe_key}`: row[$key] }})
+        SET n += apoc.map.submap(row, $props)
+    }} IN TRANSACTIONS OF 2000 ROWS
+    """
+    res = graphdb.send_query(query, {"file": source_file, "key": unique_column_name, "props": properties})
+    return res if res["status"] != "error" else tool_error(f"Node load failed: {res}")
 
 def execute_relationship_load(
     source_file: str,
@@ -423,7 +313,7 @@ def execute_relationship_load(
     to_node_column: str,
     properties: list[str]
 ) -> Dict[str, Any]:
-    """Generic tool to load relationships between existing nodes from CSV."""
+    """Load relationships between existing nodes from a CSV file."""
     query = f"""
     LOAD CSV WITH HEADERS FROM "file:///" + $source_file AS row
     MATCH (from:`{from_node_label}` {{ `{from_node_column}`: row[$from_node_column] }})
@@ -439,28 +329,90 @@ def execute_relationship_load(
     }
     return graphdb.send_query(query, params)
 
-def finished(tool_context: ToolContext):
-    """Signals that the current coordination phase is complete."""
-    return tool_success("phase_status", "finished")
+# =========================
+# UNSTRUCTURED EXTRACTION TOOLS
+# =========================
+
+def set_proposed_entities(proposed_entity_types: list[str], tool_context: ToolContext):
+    """Store the proposed entity types."""
+    tool_context.state[PROPOSED_ENTITIES] = proposed_entity_types
+    return tool_success(PROPOSED_ENTITIES, proposed_entity_types)
+
+def get_proposed_entities(tool_context: ToolContext):
+    """Retrieve the proposed entity types."""
+    ents = tool_context.state.get(PROPOSED_ENTITIES)
+    if not ents:
+        return tool_error("No proposed entities found.")
+    return tool_success(PROPOSED_ENTITIES, ents)
+
+def approve_proposed_entities(tool_context: ToolContext):
+    """Approve the proposed entity types."""
+    ents = tool_context.state.get(PROPOSED_ENTITIES)
+    if not ents:
+        return tool_error("No entities proposed.")
+    tool_context.state[APPROVED_ENTITIES] = ents
+    return tool_success(APPROVED_ENTITIES, ents)
+
+def get_approved_entities(tool_context: ToolContext):
+    """Retrieve the approved entity types."""
+    ents = tool_context.state.get(APPROVED_ENTITIES)
+    if not ents:
+        return tool_error("No approved entities found.")
+    return tool_success(APPROVED_ENTITIES, ents)
+
+def add_proposed_fact(
+    approved_subject_label: str,
+    proposed_predicate_label: str,
+    approved_object_label: str,
+    tool_context: ToolContext
+):
+    """Add a proposed fact type to the plan."""
+    approved_ents = tool_context.state.get(APPROVED_ENTITIES, [])
+    if approved_subject_label not in approved_ents or approved_object_label not in approved_ents:
+        return tool_error("Subject or Object label not in approved entities list.")
+
+    facts = tool_context.state.get(PROPOSED_FACTS, {})
+    facts[proposed_predicate_label] = {
+        "subject_label": approved_subject_label,
+        "predicate_label": proposed_predicate_label,
+        "object_label": approved_object_label
+    }
+    tool_context.state[PROPOSED_FACTS] = facts
+    return tool_success(PROPOSED_FACTS, facts)
+
+def get_proposed_facts(tool_context: ToolContext):
+    """Retrieve the proposed fact types."""
+    facts = tool_context.state.get(PROPOSED_FACTS, {})
+    if not facts:
+        return tool_error("No proposed facts found.")
+    return tool_success(PROPOSED_FACTS, facts)
+
+def approve_proposed_facts(tool_context: ToolContext):
+    """Approve the proposed fact types."""
+    facts = tool_context.state.get(PROPOSED_FACTS)
+    if not facts:
+        return tool_error("No facts to approve.")
+    tool_context.state[APPROVED_FACTS] = facts
+    return tool_success(APPROVED_FACTS, facts)
+
+def get_approved_facts(tool_context: ToolContext):
+    """Retrieve the approved fact types."""
+    facts = tool_context.state.get(APPROVED_FACTS, {})
+    if not facts:
+        return tool_error("No approved facts found.")
+    return tool_success(APPROVED_FACTS, facts)
+
+def get_well_known_types(tool_context: ToolContext):
+    """Bridge tool: pull node labels from approved construction plan into extraction phase."""
+    plan = tool_context.state.get(APPROVED_CONSTRUCTION_PLAN, {})
+    labels = {v["label"] for v in plan.values() if v.get("construction_type") == "node"}
+    return tool_success("approved_labels", list(labels))
 
 def execute_text_to_graph_load(triples: List[Dict[str, str]], tool_context: ToolContext):
-    """
-    Takes a list of extracted triples and merges them into Neo4j.
-    Expected triple format: {'subject': 'James', 'subject_label': 'Person', 'predicate': 'WORKS_AT', 'object': 'Google', 'object_label': 'Company'}
-    """
+    """Load a list of triples into Neo4j."""
     if not triples:
         return tool_error("No triples provided for loading.")
 
-    query = """
-    UNWIND $triples AS triple
-    MERGE (s:`{triple.subject_label}` {name: triple.subject})
-    MERGE (o:`{triple.object_label}` {name: triple.object})
-    MERGE (s)-[r:`{triple.predicate}`]->(o)
-    SET r.source = 'NLP_Extraction'
-    """
-    # Note: Using python f-string carefully or Cypher parameters for labels
-    # Since Cypher doesn't allow parameters for Labels, we'll iterate or use a safer APOC method
-    
     success_count = 0
     for t in triples:
         cypher = f"""
@@ -474,3 +426,63 @@ def execute_text_to_graph_load(triples: List[Dict[str, str]], tool_context: Tool
             success_count += 1
 
     return tool_success("message", f"Successfully loaded {success_count} triples from text.")
+
+# =========================
+# NEO4J DATABASE OPERATIONS
+# =========================
+
+def neo4j_is_ready() -> Dict[str, Any]:
+    """Check if Neo4j is ready."""
+    return graphdb.send_query("RETURN 'Neo4j is Ready!' as message")
+
+def drop_neo4j_schema() -> Dict[str, Any]:
+    """Drop all constraints and indexes from the Neo4j database."""
+    try:
+        # Drop constraints
+        constraints = graphdb.send_query("SHOW CONSTRAINTS YIELD name")
+        for row in constraints.get("query_result", []):
+            graphdb.send_query(f"DROP CONSTRAINT `{row['name']}`")
+
+        # Drop indexes
+        indexes = graphdb.send_query("SHOW INDEXES YIELD name")
+        for row in indexes.get("query_result", []):
+            graphdb.send_query(f"DROP INDEX `{row['name']}`")
+
+        return tool_success("message", "Neo4j schema (constraints and indexes) cleared.")
+    except Exception as e:
+        return tool_error(f"Schema drop failed: {e}")
+
+def clear_database() -> Dict[str, Any]:
+    """Clear all data from the Neo4j database."""
+    query = "MATCH (n) CALL (n) { DETACH DELETE n } IN TRANSACTIONS OF 10000 ROWS"
+    return graphdb.send_query(query)
+
+def get_apoc_procedure_names() -> Dict[str, Any]:
+    """List all APOC procedure names."""
+    cypher = "SHOW PROCEDURES YIELD name WHERE name STARTS WITH 'apoc' RETURN name"
+    result = graphdb.send_query(cypher)
+    if result["status"] == "error":
+        return result
+    names = [row["name"] for row in result["query_result"]]
+    if not names:
+        return tool_error("APOC procedures not found.")
+    return tool_success("apoc_procedure_names", names)
+
+def get_apoc_version() -> Dict[str, Any]:
+    """Get the version of APOC installed."""
+    result = graphdb.send_query("RETURN apoc.version() AS apoc_version")
+    if result["status"] == "error":
+        return result
+    return tool_success("apoc_version", result["query_result"][0]["apoc_version"])
+
+def get_neo4j_version() -> Dict[str, Any]:
+    """Get the version and edition of the Neo4j database."""
+    cypher = "CALL dbms.components() yield name, versions, edition unwind versions as version return name, version, edition"
+    result = graphdb.send_query(cypher)
+    if result["status"] == "error":
+        return result
+    return tool_success("neo4j_version", result["query_result"][0])
+
+def finished(tool_context: ToolContext):
+    """Signal that the current coordination phase is complete."""
+    return tool_success("phase_status", "finished")

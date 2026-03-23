@@ -1,90 +1,151 @@
-# Add your utilities or helper functions to this file.
-
 import os
+import logging
+from pathlib import Path
+import re
+from typing import Optional, Dict, Any, Union
+
 from dotenv import load_dotenv, find_dotenv
-
-from google.genai import types # For creating message Content/Parts
+from google.genai import types
 from google.adk.agents import Agent
-from google.adk.sessions import InMemorySessionService, Session
+from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
-from typing import Optional, Dict, Any
 
-# these expect to find a .env file at the directory above the lesson.                                                                                                                     # the format for that file is (without the comment)                                                                                                                                       #API_KEYNAME=AStringThatIsTheLongAPIKeyFromSomeService                                                                                                                                     
+# ==========================================
+# 1. CONFIGURATION & ENVIRONMENT
+# ==========================================
+
+# Configure logging for a professional "startup" feel
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S"
+)
+logger = logging.getLogger("ADK-Helper")
+
+_ENV_LOADED = False
+
 def load_env():
-    _ = load_dotenv(find_dotenv())
+    global _ENV_LOADED
+    if not _ENV_LOADED:
+        env_file = find_dotenv()
+        load_dotenv(env_file)
+        _ENV_LOADED = True
+
+
+def get_env_var(key: str, default: Optional[str] = None, required: bool = True) -> str:
+    """Fetch environment variable with optional strict enforcement."""
+    load_env()
+    val = os.getenv(key, default)
+    if required and not val:
+        raise ValueError(f"Missing mandatory environment variable: {key}")
+    return val
 
 def get_openai_api_key():
-    load_env()
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    return openai_api_key
+    return get_env_var("OPENAI_API_KEY")
 
+def get_neo4j_import_dir() -> Path:
+    """Returns the Neo4j import directory as a resolved Path object."""
+    path_str = get_env_var("NEO4J_IMPORT_DIR")
+    path = Path(path_str).resolve()
+    if not path.exists():
+        logger.error(f"Neo4j Import Directory does not exist: {path}")
+    return path
 
-def get_neo4j_import_dir():
-    """Gets the neo4j import directory from an environment variable
-    """
-    load_env()
-    neo4j_import_dir = os.getenv("NEO4J_IMPORT_DIR")
-    return neo4j_import_dir
-
-### ADK runner wrapper ###
+def sanitize_name(name: str) -> str:
+    """Sanitizes labels/types to prevent Cypher injection."""
+    return re.sub(r'[^a-zA-Z0-9_]', '', name)
+# ==========================================
+# 2. AGENT CALLER (Orchestration Wrapper)
+# ==========================================
 
 class AgentCaller:
-    """A simple wrapper class for interacting with an ADK agent."""
+    """
+    A refined wrapper for ADK agents that handles event streams,
+    state persistence, and error logging.
+    """
     
     def __init__(self, agent: Agent, runner: Runner, user_id: str, session_id: str):
-        """Initialize the AgentCaller with required components."""
         self.agent = agent
         self.runner = runner
         self.user_id = user_id
         self.session_id = session_id
-    
-    def get_session(self):
-        return self.runner.session_service.get_session(app_name=self.runner.app_name, user_id=self.user_id, session_id=self.session_id)
+        self.logger = logging.getLogger(f"Agent:{agent.name}")
 
-    async def call(self, query: str, verbose: bool = False):
-        """Call the agent with a query and return the response."""
-        print(f"\n>>> User Query: {query}")
+    async def get_session(self):
+        """Fetch the current state of the agent's session."""
+        return await self.runner.session_service.get_session(
+            app_name=self.runner.app_name, 
+            user_id=self.user_id, 
+            session_id=self.session_id
+        )
 
-        # Prepare the user's message in ADK format
+    async def call(self, query: str, verbose: bool = False) -> str:
+        """
+        Executes a turn with the agent and returns the final text response.
+        Handles tool calls and multi-turn logic automatically via the ADK Runner.
+        """
+        self.logger.info(f"Query: {query}")
+
         content = types.Content(role='user', parts=[types.Part(text=query)])
+        final_response_text = ""
 
-        final_response_text = "Agent did not produce a final response." # Default
+        try:
+            async for event in self.runner.run_async(
+                user_id=self.user_id, 
+                session_id=self.session_id, 
+                new_message=content
+            ):
+                if verbose:
+                    self.logger.debug(f"Event: {type(event).__name__} | Author: {event.author}")
 
-        # Key Concept: run_async executes the agent logic and yields Events.
-        # We iterate through events to find the final answer.
-        async for event in self.runner.run_async(user_id=self.user_id, session_id=self.session_id, new_message=content):
-            # You can uncomment the line below to see *all* events during execution
-            if verbose:
-                print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Content: {event.content}")
+                # Check for the concluding turn response
+                if event.is_final_response():
+                    if event.content and event.content.parts:
+                        # Extract text from the first available part
+                        final_response_text = next(
+                            (p.text for p in event.content.parts if p.text), 
+                            "Agent produced an empty response."
+                        )
+                    
+                    # Handle failures or escalations
+                    if event.actions and event.actions.escalate:
+                        error_msg = event.error_message or "Unknown escalation"
+                        self.logger.error(f"Agent Escalated: {error_msg}")
+                        final_response_text = f"Error: {error_msg}"
+                    
+                    # Break only if the responding agent is our target
+                    if event.author == self.agent.name:
+                        break
 
-            # Key Concept: is_final_response() marks the concluding message for the turn.
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    # Assuming text response in the first part
-                    final_response_text = event.content.parts[0].text
-                elif event.actions and event.actions.escalate: # Handle potential errors/escalations
-                    final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
-                if event.author == self.agent.name:
-                    break # Stop processing events once the final response is found
+        except Exception as e:
+            self.logger.exception("Critcal error during agent execution:")
+            return f"System Error: {str(e)}"
 
-        self.session = self.runner.session_service.get_session(app_name=self.runner.app_name, user_id=self.user_id, session_id=self.session_id)
-
-        print(f"<<< Agent Response: {final_response_text}")
+        self.logger.info(f"Response: {final_response_text[:100]}...")
         return final_response_text
 
-async def make_agent_caller(agent: Agent, initial_state: Optional[Dict[str, Any]] = {}) -> AgentCaller:
-    """Create and return an AgentCaller instance for the given agent."""
+# ==========================================
+# 3. FACTORY METHODS
+# ==========================================
+
+async def make_agent_caller(
+    agent: Agent, 
+    initial_state: Optional[Dict[str, Any]] = None,
+    session_id: str = "default_session"
+) -> AgentCaller:
+    """
+    Bootstrap a new AgentCaller with an isolated in-memory session.
+    """
     session_service = InMemorySessionService()
-    app_name = agent.name + "_app"
-    user_id = agent.name + "_user"
-    session_id = agent.name + "_session_01"
+    app_name = f"{agent.name}_app"
+    user_id = "system_user"
     
-    # Initialize a session
+    # Initialize the session with the provided state
     await session_service.create_session(
         app_name=app_name,
         user_id=user_id,
         session_id=session_id,
-        state=initial_state
+        state=initial_state or {}
     )
     
     runner = Runner(

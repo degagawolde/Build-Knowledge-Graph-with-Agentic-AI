@@ -1,53 +1,28 @@
+# agents.yml
 agents:
   - name: "user_intent_agent"
     role: "Knowledge Graph Use Case Architect"
     description: "Helps users define the scope, category, and specific goals of their knowledge graph."
     goal: "Define a 'kind_of_graph' and a detailed 'description' approved by the user."
     instructions: |
-      # Persona
-      You are an expert at knowledge graph use cases. Your tone is consultative and insightful.
-      
-      # Conversational Hints
-      If the user is unsure, suggest classic use cases:
-      - Social networks (relationships)
-      - Logistics networks (suppliers/partners)
-      - Recommendation systems (products/customers)
-      - Fraud detection (transaction patterns)
-      - Pop-culture (movies/music/books)
-      
-      # Output Definition
-      A user goal must have:
-      - kind_of_graph: 1-3 words (e.g., "Social Network")
-      - description: A few sentences explaining the intent (e.g., "Analyzing professional relationships.")
-      
-      # Chain of Thought
-      1. Understand the user's goal through dialogue.
-      2. Ask clarifying questions as needed.
-      3. Use 'set_perceived_user_goal' to record your current understanding.
-      4. Present this to the user for confirmation.
-      5. Once agreed, use 'approve_perceived_user_goal' to finalize state.
+      1. Consult with the user to determine the purpose of the Knowledge Graph.
+      2. Use 'set_perceived_user_goal' to record the kind and description of the graph.
+      3. Ask the user for confirmation.
+      4. Once they agree, call 'approve_perceived_user_goal' to lock the state for subsequent agents.
     tools:
       - "set_perceived_user_goal"
       - "approve_perceived_user_goal"
 
   - name: "file_suggestion_agent"
     role: "Data Relevance Critic"
-    description: "Audits available structured files to determine which are relevant to the graph's goal."
-    goal: "Identify and get approval for a list of structured data files (CSV/JSON/Excel)."
+    description: "Audits available files to determine which are relevant to the graph's goal."
+    goal: "Identify and get approval for a list of data files (CSV/JSON/Text)."
     instructions: |
-      # Persona
-      You are a constructive critic reviewing a list of files for graph construction.
-      
-      # Task Constraints
-      - Only consider structured data files like CSV, JSON, or Excel.
-      - Use 'get_approved_user_goal' to align with the project scope.
-      
-      # Chain of Thought
-      1. Fetch the approved goal and list available files using 'list_available_files'.
-      2. If a file's content is unclear, use 'sample_file' to inspect headers/rows.
-      3. Evaluate relevance and record suggestions via 'set_suggested_files'.
-      4. Ask the user to approve the list. 
-      5. Iterate based on feedback; if approved, use 'approve_suggested_files'.
+      1. Fetch the goal using 'get_approved_user_goal'.
+      2. Call 'list_available_files' to see what's in the import directory.
+      3. Use 'sample_file' to peek inside files you aren't sure about.
+      4. Suggest relevant files with 'set_suggested_files' and explain why.
+      5. Once the user approves the selection, call 'approve_suggested_files'.
     tools:
       - "get_approved_user_goal"
       - "list_available_files"
@@ -58,20 +33,12 @@ agents:
 
   - name: "proposal_agent"
     role: "Property Graph Schema Architect"
-    description: "Proposes construction rules to transform files into nodes or relationships."
-    goal: "Define how CSV/JSON files map to a connected Property Graph."
+    description: "Proposes construction rules to transform structured files into nodes or relationships."
     instructions: |
-      # Design Rules
-      - **Nodes**: Files with 1 unique identifier.
-      - **Full Relationships**: Files linking two things without a unique ID of their own.
-      - **Reference Relationships**: Foreign keys inside node files.
-      - Result must be a connected graph.
-
-      # Chain of Thought
-      1. For each approved file, check for unique IDs using 'sample_file' and 'search_file'.
-      2. Propose nodes using 'propose_node_construction'.
-      3. Propose relationships using 'propose_relationship_construction'.
-      4. Present the plan via 'get_proposed_construction_plan'.
+      1. For each approved file from 'get_approved_files', identify unique identifiers.
+      2. Use 'propose_node_construction' for files representing entities (e.g., Products, Users).
+      3. Use 'propose_relationship_construction' for files representing connections (e.g., Transactions, Friendships).
+      4. Present the complete plan to the user using 'get_proposed_construction_plan'.
     tools:
       - "get_approved_user_goal"
       - "get_approved_files"
@@ -83,23 +50,12 @@ agents:
 
   - name: "ner_schema_agent_v1"
     role: "Named Entity Recognition Strategist"
-    description: "Proposes the kind of named entities that could be extracted from text files."
-    goal: "Identify well-known and discovered entity types from sampled text."
+    description: "Proposes entity types to extract from unstructured text."
     instructions: |
-      # Role
-      You are a top-tier algorithm designed for proposing named entity types (not instances) relevant to the user goal.
-
-      # Design Rules
-      - **Well-known**: Reuse existing node labels (e.g., 'Person').
-      - **Discovered**: Find new relevant entities (e.g., 'Genre', 'Award').
-      - **Anti-Pattern**: No quantities. 'Rating' is a property, not an entity.
-
-      # Chain of Thought
-      1. Fetch context using 'get_approved_user_goal', 'get_approved_files', and 'get_well_known_types'.
-      2. Use 'sample_file' to understand content.
-      3. Identify well-known and discover new entity types.
-      4. Save via 'set_proposed_entities'.
-      5. Present to user and finalize with 'approve_proposed_entities'.
+      1. Check existing node labels using 'get_well_known_types' to maintain consistency.
+      2. Sample text files and identify additional relevant entity types.
+      3. Save your proposal using 'set_proposed_entities'.
+      4. After user feedback, call 'approve_proposed_entities'.
     tools:
       - "get_approved_user_goal"
       - "get_approved_files"
@@ -107,36 +63,6 @@ agents:
       - "get_well_known_types"
       - "set_proposed_entities"
       - "approve_proposed_entities"
-
-  - name: "fact_type_extraction_agent_v1"
-    role: "Relationship Ontology Specialist"
-    description: "Proposes the kind of relevant facts (subject-predicate-object) that could be extracted from text files."
-    goal: "Identify relationship types (predicates) that connect approved entities based on the user's goal."
-    instructions: |
-      # Role
-      You are a top-tier algorithm designed for analyzing text and proposing general fact types (triplets).
-      Example: (Person, DIRECTED, Movie) instead of "James Cameron directed Titanic".
-
-      # Design Rules
-      - **Subjects/Objects**: Use ONLY approved entity types.
-      - **Predicates**: Must be found in the source text. Do not guess.
-      - **Relevance**: Optimize for facts that satisfy the user's goal (e.g., ratings, roles).
-      - **Format**: (Subject Type, Predicate, Object Type).
-
-      # Chain of Thought
-      1. Fetch context: Get user goal, approved files, and approved entities.
-      2. Analyze Content: Use 'sample_file' to see how entities interact in the data.
-      3. Propose Facts: For each discovered relationship type, use 'add_proposed_fact'.
-      4. Review: Retrieve all proposals via 'get_proposed_facts' and present them with explanations.
-      5. Finalize: Once the user agrees, use 'approve_proposed_facts'.
-    tools:
-      - "get_approved_user_goal"
-      - "get_approved_files"
-      - "get_approved_entities"
-      - "sample_file"
-      - "add_proposed_fact"
-      - "get_proposed_facts"
-      - "approve_proposed_facts"
 
   - name: "schema_critic_agent"
     role: "Expert Knowledge Graph Modeling Critic"
@@ -162,54 +88,65 @@ agents:
       - "get_proposed_construction_plan"
       - "sample_file"
       - "search_file"
-  
+
   - name: "schema_proposal_coordinator"
     role: "Schema Proposal Coordinator"
     description: "Manages the high-level collaboration for schema approval."
     instructions: |
       You are a coordinator. Use tools to propose a schema to the user.
-      1. Use 'schema_refinement_loop' to generate the initial construction rules.
+      1. Use 'refinement_loop' to generate the initial construction rules.
       2. Present the 'proposed_construction_plan' to the user.
-      3. If the user disapproves, use the feedback to call 'schema_refinement_loop' again.
+      3. If the user disapproves, use the feedback to call 'refinement_loop' again.
       4. If the user approves, call 'approve_proposed_construction_plan' and then the 'finished' tool.
     tools:
-      - "schema_refinement_loop"
+      - "refinement_loop"
       - "get_proposed_construction_plan"
       - "approve_proposed_construction_plan"
       - "finished"
-  
+
+  - name: "fact_type_extraction_agent_v1"
+    role: "Relationship Ontology Specialist"
+    description: "Proposes the kinds of triplets to extract from text."
+    instructions: |
+      1. Fetch 'get_approved_entities' to know your constraints.
+      2. Sample text to find how these entities relate (predicates).
+      3. Record each proposed fact type using 'add_proposed_fact'.
+      4. Finalize the ontology with 'approve_proposed_facts'.
+    tools:
+      - "get_approved_user_goal"
+      - "get_approved_files"
+      - "get_approved_entities"
+      - "sample_file"
+      - "add_proposed_fact"
+      - "get_proposed_facts"
+      - "approve_proposed_facts"
+
   - name: "text_extraction_worker"
     role: "NLP Data Extraction Engineer"
-    description: "Extracts actual entity instances and relationship triples from text files based on the approved ontology."
-    goal: "Populate the graph with real data extracted from unstructured text."
+    description: "Extracts actual data and loads it via optimized batch tools."
     instructions: |
-      1. Fetch the approved entities using 'get_approved_entities' and approved facts using 'get_approved_facts'.
-      2. For each approved unstructured file:
-         - Use 'sample_file' to read the content.
-         - Identify instances of the approved entities.
-         - Identify instances of the approved relationship facts.
-      3. Use 'execute_text_to_graph_load' to send these triples to Neo4j.
-      4. Report the number of extracted triples to the user.
+      1. Read unstructured files and extract Subject-Predicate-Object triples.
+      2. Format triples into a list of dictionaries.
+      3. Call 'execute_text_to_graph_load' to perform a high-performance batch merge into Neo4j.
     tools:
       - "get_approved_entities"
       - "get_approved_facts"
       - "get_approved_files"
       - "sample_file"
       - "execute_text_to_graph_load"
-  
+
   - name: "graph_builder_agent"
     role: "Neo4j Database Engineer"
-    description: "Executes the final data migration into the Neo4j database."
-    goal: "Successfully load all approved nodes and relationships into the graph."
+    description: "Executes the final data migration."
     instructions: |
-      1. Review the 'approved_construction_plan'.
-      2. For every 'node' type in the plan, call 'execute_node_load'.
-      3. For every 'relationship' type in the plan, call 'execute_relationship_load'.
-      4. If unstructured facts were approved, trigger the extraction pipeline.
-      5. Report the final node and relationship counts to the user.
+      1. Call 'drop_neo4j_schema' and 'clear_database' for a fresh start.
+      2. Iterate through 'get_approved_construction_plan'.
+      3. Call 'execute_node_load' for nodes and 'execute_relationship_load' for connections.
+      4. Confirm the status with 'neo4j_is_ready'.
     tools:
       - "get_approved_construction_plan"
       - "execute_node_load"
       - "execute_relationship_load"
+      - "drop_neo4j_schema"
+      - "clear_database"
       - "neo4j_is_ready"
-      - "clear_neo4j_data"
