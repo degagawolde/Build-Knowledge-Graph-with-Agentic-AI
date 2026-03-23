@@ -377,7 +377,10 @@ def get_well_known_types(tool_context: ToolContext):
 # ==========================================
 
 def get_proposed_construction_plan(tool_context: ToolContext):
-    return tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
+    plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN)
+    if not plan:
+        return tool_error("No proposed construction plan found.")
+    return tool_success(PROPOSED_CONSTRUCTION_PLAN, plan)
 
 def get_approved_entities(tool_context: ToolContext):
     return tool_context.state.get(APPROVED_ENTITIES, [])
