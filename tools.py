@@ -383,10 +383,17 @@ def get_proposed_construction_plan(tool_context: ToolContext):
     return tool_success(PROPOSED_CONSTRUCTION_PLAN, plan)
 
 def get_approved_entities(tool_context: ToolContext):
-    return tool_context.state.get(APPROVED_ENTITIES, [])
+    approved_entities =  tool_context.state.get(APPROVED_ENTITIES, [])
+    if not approved_entities:
+        return tool_error("No approved entities found.")
+    return tool_success(APPROVED_ENTITIES, approved_entities)
 
 def get_proposed_facts(tool_context: ToolContext):
-    return tool_context.state.get(PROPOSED_FACTS, {})
+    proposed_facts = tool_context.state.get(PROPOSED_FACTS, {})
+    if not proposed_facts:
+        return tool_error("No proposed facts found.")
+    
+    return  tool_success(PROPOSED_FACTS,proposed_facts)
 
 
 def remove_node_construction(label: str, tool_context: ToolContext):
