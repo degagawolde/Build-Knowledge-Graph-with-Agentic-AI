@@ -100,6 +100,7 @@ agents:
       4. If the user approves, call 'approve_proposed_construction_plan' and then the 'finished' tool.
     tools:
       - "refinement_loop"
+      - "get_approved_user_goal"
       - "get_proposed_construction_plan"
       - "approve_proposed_construction_plan"
       - "finished"

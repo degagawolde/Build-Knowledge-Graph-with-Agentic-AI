@@ -98,6 +98,7 @@ async def process_structured_data(configs, shared_state):
 
     coordinator_agent = create_agent(configs['schema_proposal_coordinator'], [
         agent_tool.AgentTool(refinement_loop),
+        tools.get_approved_user_goal,
         tools.get_proposed_construction_plan,
         tools.approve_proposed_construction_plan,
         tools.remove_node_construction, 
