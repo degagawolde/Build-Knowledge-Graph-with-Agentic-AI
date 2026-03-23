@@ -68,5 +68,3 @@ In Phase 3, the script uses a `schema_proposal_coordinator`. This agent doesn't 
 | **3. Schema** | Design the Graph (Nodes/Edges). | `approved_construction_plan` |
 | **4. NLP** | Extract facts from plain text. | `extraction_complete` |
 | **5. Build** | Write data into Neo4j. | `migration_complete` |
-
-**Would you like to see what the `agents.yml` file should look like to make this script work?**
