@@ -108,7 +108,7 @@ async def main():
     if has_structured:
         print("\n📊 Starting Coordinated Schema Proposal...")
         refinement_loop = setup_refinement_loop(configs)
-        refinement_loop_tool = agent_tool.AgentTool(refinement_loop, name="schema_refinement_loop")
+        refinement_loop_tool = agent_tool.AgentTool(refinement_loop)
 
         coordinator_tools = [
             refinement_loop_tool,
