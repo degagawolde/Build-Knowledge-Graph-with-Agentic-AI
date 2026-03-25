@@ -40,7 +40,6 @@ agents:
       3. Use 'propose_relationship_construction' for files representing connections (e.g., Transactions, Friendships).
       4. Present the complete plan to the user using 'get_proposed_construction_plan'.
     tools:
-      - "get_approved_user_goal"
       - "get_approved_files"
       - "sample_file"
       - "search_file"
@@ -57,7 +56,6 @@ agents:
       3. Save your proposal using 'set_proposed_entities'.
       4. After user feedback, call 'approve_proposed_entities'.
     tools:
-      - "get_approved_user_goal"
       - "get_approved_files"
       - "sample_file"
       - "get_well_known_types"
@@ -83,7 +81,6 @@ agents:
       - If the schema is perfect, respond ONLY with the word: 'valid'.
       - If there are issues, respond with 'retry' followed by a concise bulleted list of problems.
     tools:
-      - "get_approved_user_goal"
       - "get_approved_files"
       - "get_proposed_construction_plan"
       - "sample_file"
@@ -94,20 +91,17 @@ agents:
     description: "Orchestrates the lifecycle of schema creation by delegating technical refinement to the LoopAgent."
     instructions: |
       ### CORE RESPONSIBILITIES:
-      1. **Goal Acquisition**: Start by calling `get_approved_user_goal` to understand the target schema requirements.
-      2. **Delegation**: Pass the user goal to the `refinement_loop`. Treat this agent as your technical specialist. It will iterate internally (Proposal -> Critique) to produce a high-quality plan.
-      3. **Presentation**: Use `get_proposed_construction_plan` to retrieve the result from the loop and present it clearly to the user for feedback.
-      4. **Feedback Integration**: 
+      1. **Delegation**: Pass the user goal to the `refinement_loop`. Treat this agent as your technical specialist. It will iterate internally (Proposal -> Critique) to produce a high-quality plan.
+      2. **Presentation**: Use `get_proposed_construction_plan` to retrieve the result from the loop and present it clearly to the user for feedback.
+      3. **Feedback Integration**: 
         - If the user requests changes, send that feedback back into the `refinement_loop` for another round of optimization.
         - Use tools like `remove_node_construction` or `remove_relationship_construction` ONLY if the user specifies surgical removals that don't require a full re-propose.
-      5. **Finalization**: Once the user is satisfied, call `approve_proposed_construction_plan` and signal completion with the `finished` tool.
+      4. **Finalization**: Once the user is satisfied, call `approve_proposed_construction_plan` and signal completion with the `finished` tool.
 
       ### CRITICAL CONSTRAINTS:
-      - Never guess the user's goal; always use `get_approved_user_goal`.
       - Do not attempt to write the schema rules yourself; delegate the technical heavy lifting to the `refinement_loop`.
     tools:
       - "refinement_loop"
-      - "get_approved_user_goal"
       - "get_proposed_construction_plan"
       - "approve_proposed_construction_plan"
       - "remove_node_construction"
@@ -123,7 +117,6 @@ agents:
       3. Record each proposed fact type using 'add_proposed_fact'.
       4. Finalize the ontology with 'approve_proposed_facts'.
     tools:
-      - "get_approved_user_goal"
       - "get_approved_files"
       - "get_approved_entities"
       - "sample_file"

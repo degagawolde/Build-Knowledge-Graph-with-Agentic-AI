@@ -78,7 +78,6 @@ async def process_structured_data(configs, shared_state):
     logger.info("📊 Initializing Structured Data Pipeline (CSV/JSON)")
 
     proposal_agent = create_agent(configs['proposal_agent'], [
-        tools.get_approved_user_goal,
         tools.get_approved_files,
         tools.sample_file,
         tools.search_file,
@@ -87,7 +86,6 @@ async def process_structured_data(configs, shared_state):
         tools.get_proposed_construction_plan
     ])
     critic_agent = create_agent(configs['schema_critic_agent'], [
-        tools.get_approved_user_goal,
         tools.get_approved_files,
         tools.get_proposed_construction_plan,
         tools.sample_file,
@@ -102,7 +100,6 @@ async def process_structured_data(configs, shared_state):
         configs['schema_proposal_coordinator'], 
         [
         agent_tool.AgentTool(refinement_loop),
-        tools.get_approved_user_goal,
         tools.get_proposed_construction_plan,
         tools.approve_proposed_construction_plan,
         tools.remove_node_construction, 
@@ -132,9 +129,11 @@ async def process_unstructured_data(configs, shared_state):
 
     # 1. Entity Recognition
     ner_agent = create_agent(configs['ner_schema_agent_v1'], [
-        tools.get_well_known_types, tools.get_approved_user_goal,
-        tools.get_approved_files, tools.sample_file,
-        tools.set_proposed_entities, tools.approve_proposed_entities
+        tools.get_well_known_types, 
+        tools.get_approved_files, 
+        tools.sample_file,
+        tools.set_proposed_entities, 
+        tools.approve_proposed_entities
     ])
     ner_caller = await make_agent_caller(ner_agent, initial_state=shared_state)
     await ner_caller.call("Analyze the text files and propose entity types.")
@@ -145,9 +144,11 @@ async def process_unstructured_data(configs, shared_state):
     logger.info("🔗 Moving to Fact Discovery phase")
     shared_state = (await ner_caller.get_session()).state
     fact_agent = create_agent(configs['fact_type_extraction_agent_v1'], [
-        tools.get_approved_user_goal, tools.get_approved_files,
-        tools.sample_file, tools.get_proposed_facts,
-        tools.get_approved_entities, tools.add_proposed_fact,
+        tools.get_approved_files,
+        tools.sample_file, 
+        tools.get_proposed_facts,
+        tools.get_approved_entities, 
+        tools.add_proposed_fact,
         tools.approve_proposed_facts
     ])
     fact_caller = await make_agent_caller(fact_agent, initial_state=shared_state)
@@ -157,8 +158,10 @@ async def process_unstructured_data(configs, shared_state):
 
     # 3. Final Execution
     worker_agent = create_agent(configs['text_extraction_worker'], [
-        tools.execute_text_to_graph_load, tools.get_approved_facts,
-        tools.get_approved_files, tools.sample_file
+        tools.execute_text_to_graph_load, 
+        tools.get_approved_facts,
+        tools.get_approved_files, 
+        tools.sample_file
     ])
     worker_caller = await make_agent_caller(worker_agent, initial_state=(await fact_caller.get_session()).state)
     logger.info("⚙️ Triggering final NLP Worker migration")
@@ -186,9 +189,12 @@ async def main():
          [tools.set_perceived_user_goal, tools.approve_perceived_user_goal]),
 
         ("FILE SELECTION", "approved_files", 'file_suggestion_agent',
-         [tools.get_approved_user_goal, tools.list_available_files, 
-          tools.sample_file, tools.set_suggested_files, 
-          tools.get_suggested_files, tools.approve_suggested_files])
+         [tools.get_approved_user_goal, 
+          tools.list_available_files, 
+          tools.sample_file, 
+          tools.set_suggested_files, 
+          tools.get_suggested_files, 
+          tools.approve_suggested_files])
     ]
 
     current_idx = 0
