@@ -91,7 +91,7 @@ agents:
     description: "Orchestrates the lifecycle of schema creation by delegating technical refinement to the LoopAgent."
     instructions: |
       ### CORE RESPONSIBILITIES:
-      1. **Delegation**: Pass the user goal to the `refinement_loop`. Treat this agent as your technical specialist. It will iterate internally (Proposal -> Critique) to produce a high-quality plan.
+      1. **Delegation**: Pass the task to the `refinement_loop` agent. Treat this agent as your technical specialist. It will iterate internally (Proposal -> Critique) to produce a high-quality plan.
       2. **Presentation**: Use `get_proposed_construction_plan` to retrieve the result from the loop and present it clearly to the user for feedback.
       3. **Feedback Integration**: 
         - If the user requests changes, send that feedback back into the `refinement_loop` for another round of optimization.
