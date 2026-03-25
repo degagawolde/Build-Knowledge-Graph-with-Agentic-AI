@@ -62,7 +62,12 @@ def set_perceived_user_goal(
     graph_description: str,
     tool_context: ToolContext,
 ):
-    """Record the user's initial goal."""
+    """Sets the perceived user's goal, including the kind of graph and its description.
+    
+    Args:
+        kind_of_graph: 2-3 word definition of the kind of graph, for example "recent US patents"
+        graph_description: a single paragraph description of the graph, summarizing the user's intent
+    """
     goal_data = {
         "kind_of_graph": kind_of_graph,
         "graph_description": graph_description,
@@ -71,7 +76,10 @@ def set_perceived_user_goal(
     return tool_success(PERCEIVED_GOAL_KEY, goal_data)
 
 def approve_perceived_user_goal(tool_context: ToolContext):
-    """Approve the perceived goal, making it the official goal."""
+    """Upon approval from user, will record the perceived user goal as the approved user goal.
+    
+    Only call this tool if the user has explicitly approved the perceived user goal.
+    """
     perceived = tool_context.state.get(PERCEIVED_GOAL_KEY)
     if not perceived:
         return tool_error("No perceived goal found.")
@@ -90,7 +98,17 @@ def get_approved_user_goal(tool_context: ToolContext):
 # =========================
 
 def list_available_files(tool_context: ToolContext) -> Dict[str, Any]:
-    """List all files inside the Neo4j import directory."""
+    
+    f"""Lists files available for knowledge graph construction.
+    All files are relative to the import directory.
+
+    Returns:
+        dict: A dictionary containing metadata about the content.
+                Includes a 'status' key ('success' or 'error').
+                If 'success', includes a {ALL_AVAILABLE_FILES} key with list of file names.
+                If 'error', includes an 'error_message' key.
+                The 'error_message' may have instructions about how to handle the error.
+    """
     try:
         import_dir = get_import_dir()
         file_names = [
@@ -104,7 +122,21 @@ def list_available_files(tool_context: ToolContext) -> Dict[str, Any]:
         return tool_error(f"Failed to list files: {e}")
 
 def sample_file(file_path: str, tool_context: ToolContext) -> Dict[str, Any]:
-    """Read up to 100 lines from a file."""
+    """Samples a file by reading its content as text.
+    
+    Treats any file as text and reads up to a maximum of 100 lines.
+    
+    Args:
+      file_path: file to sample, relative to the import directory
+      
+    Returns:
+        dict: A dictionary containing metadata about the content,
+            along with a sampling of the file.
+            Includes a 'status' key ('success' or 'error').
+            If 'success', includes a 'content' key with textual file content.
+            If 'error', includes an 'error_message' key.
+            The 'error_message' may have instructions about how to handle the error.
+    """
     try:
         relative_path = validate_relative_path(file_path)
         import_dir = get_import_dir()
@@ -121,7 +153,22 @@ def sample_file(file_path: str, tool_context: ToolContext) -> Dict[str, Any]:
         return tool_error(f"Failed to read file: {e}")
 
 def search_file(file_path: str, query: str) -> dict:
-    """Searches any text file (csv, txt, md) for lines containing the query."""
+    """
+    Searches any text file (markdown, csv, txt) for lines containing the given query string.
+    Simple grep-like functionality that works with any text file.
+    Search is always case insensitive.
+
+    Args:
+      file_path: Path to the file, relative to the Neo4j import directory.
+      query: The string to search for.
+
+    Returns:
+        dict: A dictionary with 'status' ('success' or 'error').
+              If 'success', includes 'search_results' containing 'matching_lines'
+              (a list of dictionaries with 'line_number' and 'content' keys)
+              and basic metadata about the search.
+              If 'error', includes an 'error_message'.
+    """
     import_dir = get_import_dir()
     p = import_dir / file_path
 
@@ -152,7 +199,18 @@ def search_file(file_path: str, query: str) -> dict:
 # =========================
 
 def set_suggested_files(suggested_files: List[str], tool_context: ToolContext) -> Dict[str, Any]:
-    """Store the list of files suggested by the agent."""
+    """Set the suggested files to be used for data import.
+
+    Args:
+        suggest_files (List[str]): List of file paths to suggest
+
+    Returns:
+        Dict[str, Any]: A dictionary containing metadata about the content.
+                Includes a 'status' key ('success' or 'error').
+                If 'success', includes a {SUGGESTED_FILES} key with list of file names.
+                If 'error', includes an 'error_message' key.
+                The 'error_message' may have instructions about how to handle the error.
+    """
     tool_context.state[SUGGESTED_FILES] = suggested_files
     return tool_success(SUGGESTED_FILES, suggested_files)
 
@@ -164,7 +222,10 @@ def get_suggested_files(tool_context: ToolContext) -> Dict[str, Any]:
     return tool_success(SUGGESTED_FILES, files)
 
 def approve_suggested_files(tool_context: ToolContext) -> Dict[str, Any]:
-    """Approve the suggested files, making them the approved set."""
+    """Approves the {SUGGESTED_FILES} in state for further processing as {APPROVED_FILES}.
+    
+    If {SUGGESTED_FILES} is not in state, return an error.
+    """
     suggested = tool_context.state.get(SUGGESTED_FILES)
     if not suggested:
         return tool_error("No suggested files to approve.")
@@ -189,7 +250,30 @@ def propose_node_construction(
     proposed_properties: list[str],
     tool_context: ToolContext
 ) -> dict:
-    """Propose a node mapping for a structured file."""
+    """Propose a node construction for an approved file that supports the user goal.
+
+    The construction will be added to the proposed construction plan dictionary under using proposed_label as the key.
+
+    The construction entry will be a dictionary with the following keys:
+    - construction_type: "node"
+    - source_file: the approved file to propose a node construction for
+    - label: the proposed label of the node
+    - unique_column_name: the name of the column that will be used to uniquely identify constructed nodes
+    - properties: A list of property names for the node, derived from column names in the approved file
+
+    Args:
+        approved_file: The approved file to propose a node construction for
+        proposed_label: The proposed label for constructed nodes (used as key in the construction plan)
+        unique_column_name: The name of the column that will be used to uniquely identify constructed nodes
+        proposed_properties: column names that should be imported as node properties
+
+    Returns:
+        dict: A dictionary containing metadata about the content.
+                Includes a 'status' key ('success' or 'error').
+                If 'success', includes a "node_construction" key with the construction plan for the node
+                If 'error', includes an 'error_message' key.
+                The 'error_message' may have instructions about how to handle the error.
+    """
     # Safety check: does the column exist?
     check = search_file(approved_file, unique_column_name)
     if check["status"] == "error" or check["search_results"]["metadata"]["lines_found"] == 0:
@@ -216,7 +300,26 @@ def propose_relationship_construction(
     properties: list[str],
     tool_context: ToolContext
 ) -> dict:
-    """Propose a relationship mapping for a structured file."""
+    """Propose a relationship construction for an approved file that supports the user goal.
+
+    The construction will be added to the proposed construction plan dictionary under using proposed_relationship_type as the key.
+
+    Args:
+        approved_file: The approved file to propose a node construction for
+        proposed_relationship_type: The proposed label for constructed relationships
+        from_node_label: The label of the source node
+        from_node_column: The name of the column within the approved file that will be used to uniquely identify source nodes
+        to_node_label: The label of the target node
+        to_node_column: The name of the column within the approved file that will be used to uniquely identify target nodes
+        unique_column_name: The name of the column that will be used to uniquely identify target nodes
+
+    Returns:
+        dict: A dictionary containing metadata about the content.
+                Includes a 'status' key ('success' or 'error').
+                If 'success', includes a "relationship_construction" key with the construction plan for the node
+                If 'error', includes an 'error_message' key.
+                The 'error_message' may have instructions about how to handle the error.
+    """
     # Safety checks for both foreign key columns
     for col in [from_node_column, to_node_column]:
         check = search_file(approved_file, col)
@@ -260,7 +363,19 @@ def get_approved_construction_plan(tool_context: ToolContext):
     return tool_success(APPROVED_CONSTRUCTION_PLAN, plan)
 
 def remove_node_construction(label: str, tool_context: ToolContext):
-    """Remove a specific node mapping from the proposed plan."""
+    """Remove a node construction from the proposed construction plan based on label.
+
+    Args:
+        node_label: The label of the node construction to remove
+        tool_context: The tool context
+
+    Returns:
+        dict: A dictionary containing metadata about the content.
+                Includes a 'status' key ('success' or 'error').
+                If 'success', includes a 'node_construction_removed' key with the label of the removed node construction
+                If 'error', includes an 'error_message' key.
+                The 'error_message' may have instructions about how to handle the error.
+    """
     plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     if label in plan:
         del plan[label]
@@ -269,7 +384,19 @@ def remove_node_construction(label: str, tool_context: ToolContext):
     return tool_error(f"Node '{label}' not found in plan.")
 
 def remove_relationship_construction(rel_type: str, tool_context: ToolContext):
-    """Remove a specific relationship mapping from the proposed plan."""
+    """Remove a relationship construction from the proposed construction plan based on type.
+
+    Args:
+        relationship_type: The type of the relationship construction to remove
+        tool_context: The tool context
+
+    Returns:
+        dict: A dictionary containing metadata about the content.
+                Includes a 'status' key ('success' or 'error').
+                If 'success', includes a 'relationship_construction_removed' key with the type of the removed relationship construction
+                If 'error', includes an 'error_message' key.
+                The 'error_message' may have instructions about how to handle the error.
+    """
     plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
     if rel_type in plan:
         del plan[rel_type]

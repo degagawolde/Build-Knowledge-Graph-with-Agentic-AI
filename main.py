@@ -6,7 +6,7 @@ from google.adk.agents import Agent, LoopAgent
 from google.adk.tools import agent_tool
 
 # Local Module Imports - Ensure 'logger' is exported from helper or accessed via getLogger
-from helper import make_agent_caller, load_env
+from helper import CheckStatusAndEscalate, make_agent_caller, load_env
 import tools
 
 # Setup
@@ -26,7 +26,7 @@ def load_agent_configs(filepath):
         data = yaml.safe_load(f)
     return {agent['name']: agent for agent in data['agents']}
 
-def create_agent(config, tool_list, name_override=None, ):
+def create_agent(config, tool_list, name_override=None, output_key=None ):
     name = name_override or config['name']
     instruction = f"{config['role']}\n\n{config['instructions']}"
     return Agent(
@@ -34,7 +34,8 @@ def create_agent(config, tool_list, name_override=None, ):
         model=LLM_MODEL,
         description=config.get('description', ''),
         instruction=instruction, 
-        tools=tool_list
+        tools=tool_list,
+        output_key=output_key
     )
 
 # ==========================================
@@ -78,22 +79,29 @@ async def process_structured_data(configs, shared_state):
     logger.info("📊 Initializing Structured Data Pipeline (CSV/JSON)")
 
     proposal_agent = create_agent(configs['proposal_agent'], [
+        tools.get_approved_user_goal,
         tools.get_approved_files,
         tools.sample_file,
         tools.search_file,
         tools.propose_node_construction,
         tools.propose_relationship_construction,
+        tools.remove_relationship_construction,
+        tools.remove_node_construction,
         tools.get_proposed_construction_plan
     ])
-    critic_agent = create_agent(configs['schema_critic_agent'], [
+
+    critic_agent = create_agent(
+        configs['schema_critic_agent'], [
+        tools.get_approved_user_goal,
         tools.get_approved_files,
         tools.get_proposed_construction_plan,
         tools.sample_file,
         tools.search_file
-    ])
+    ], output_key="feedback")
+
     refinement_loop = LoopAgent(
         name="refinement_loop", max_iterations=3,
-        sub_agents=[proposal_agent, critic_agent]
+        sub_agents=[proposal_agent, critic_agent, CheckStatusAndEscalate(name="StopChecker")]
     )
 
     coordinator_agent = create_agent(
@@ -102,8 +110,6 @@ async def process_structured_data(configs, shared_state):
         agent_tool.AgentTool(refinement_loop),
         tools.get_proposed_construction_plan,
         tools.approve_proposed_construction_plan,
-        tools.remove_node_construction, 
-        tools.remove_relationship_construction,
         tools.finished])
 
     caller = await make_agent_caller(coordinator_agent, initial_state=shared_state)
