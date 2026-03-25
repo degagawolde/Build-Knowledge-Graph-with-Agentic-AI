@@ -11,16 +11,29 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 
 # ==========================================
-# 1. CONFIGURATION & ENVIRONMENT
+# 1. CONFIGURATION & LOGGING
 # ==========================================
 
-# Configure logging for a professional "startup" feel
+# Create a logs directory locally
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "agent_system.log"
+
+# Define a professional format with a clear timestamp
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S"
+    format=LOG_FORMAT,
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.FileHandler(LOG_FILE),   # Persistent local file
+        logging.StreamHandler()          # Console output for real-time tracking
+    ]
 )
+
 logger = logging.getLogger("ADK-Helper")
+logger.info(f"--- SYSTEM INITIALIZED | Logging to {LOG_FILE} ---")
 
 _ENV_LOADED = False
 
@@ -31,20 +44,15 @@ def load_env():
         load_dotenv(env_file)
         _ENV_LOADED = True
 
-
 def get_env_var(key: str, default: Optional[str] = None, required: bool = True) -> str:
-    """Fetch environment variable with optional strict enforcement."""
     load_env()
     val = os.getenv(key, default)
     if required and not val:
+        logger.error(f"CRITICAL: Missing environment variable {key}")
         raise ValueError(f"Missing mandatory environment variable: {key}")
     return val
 
-def get_openai_api_key():
-    return get_env_var("OPENAI_API_KEY")
-
 def get_neo4j_import_dir() -> Path:
-    """Returns the Neo4j import directory as a resolved Path object."""
     path_str = get_env_var("NEO4J_IMPORT_DIR")
     path = Path(path_str).resolve()
     if not path.exists():
@@ -52,8 +60,8 @@ def get_neo4j_import_dir() -> Path:
     return path
 
 def sanitize_name(name: str) -> str:
-    """Sanitizes labels/types to prevent Cypher injection."""
     return re.sub(r'[^a-zA-Z0-9_]', '', name)
+
 # ==========================================
 # 2. AGENT CALLER (Orchestration Wrapper)
 # ==========================================
@@ -61,7 +69,7 @@ def sanitize_name(name: str) -> str:
 class AgentCaller:
     """
     A refined wrapper for ADK agents that handles event streams,
-    state persistence, and error logging.
+    state persistence, and detailed local file logging.
     """
     
     def __init__(self, agent: Agent, runner: Runner, user_id: str, session_id: str):
@@ -69,10 +77,10 @@ class AgentCaller:
         self.runner = runner
         self.user_id = user_id
         self.session_id = session_id
+        # Named logger based on the specific agent
         self.logger = logging.getLogger(f"Agent:{agent.name}")
 
     async def get_session(self):
-        """Fetch the current state of the agent's session."""
         return await self.runner.session_service.get_session(
             app_name=self.runner.app_name, 
             user_id=self.user_id, 
@@ -81,10 +89,10 @@ class AgentCaller:
 
     async def call(self, query: str, verbose: bool = False) -> str:
         """
-        Executes a turn with the agent and returns the final text response.
-        Handles tool calls and multi-turn logic automatically via the ADK Runner.
+        Executes a turn and logs critical steps to the local file.
         """
-        self.logger.info(f"Query: {query}")
+        # CRITICAL STEP: Input Capture
+        self.logger.info(f"▶️  START TURN | Session: {self.session_id} | Query: '{query}'")
 
         content = types.Content(role='user', parts=[types.Part(text=query)])
         final_response_text = ""
@@ -96,32 +104,34 @@ class AgentCaller:
                 new_message=content
             ):
                 if verbose:
-                    self.logger.debug(f"Event: {type(event).__name__} | Author: {event.author}")
+                    self.logger.info(f"  ∟ [EVENT] {type(event).__name__} from {event.author}")
 
-                # Check for the concluding turn response
+                # CRITICAL STEP: Identify the final response
                 if event.is_final_response():
+                    self.logger.info(f"✅ FINAL RESPONSE RECEIVED from {event.author}")
+                    
                     if event.content and event.content.parts:
-                        # Extract text from the first available part
                         final_response_text = next(
                             (p.text for p in event.content.parts if p.text), 
                             "Agent produced an empty response."
                         )
                     
-                    # Handle failures or escalations
+                    # CRITICAL STEP: Handle failures/escalations
                     if event.actions and event.actions.escalate:
                         error_msg = event.error_message or "Unknown escalation"
-                        self.logger.error(f"Agent Escalated: {error_msg}")
+                        self.logger.warning(f"⚠️  AGENT ESCALATED: {error_msg}")
                         final_response_text = f"Error: {error_msg}"
                     
-                    # Break only if the responding agent is our target
                     if event.author == self.agent.name:
                         break
 
         except Exception as e:
-            self.logger.exception("Critcal error during agent execution:")
+            # CRITICAL STEP: System Failure
+            self.logger.error(f"❌ CRITICAL ERROR during agent execution: {str(e)}", exc_info=True)
             return f"System Error: {str(e)}"
 
-        self.logger.info(f"Response: {final_response_text[:100]}...")
+        # CRITICAL STEP: Completion Summary
+        self.logger.info(f"🏁 TURN COMPLETED | Response snippet: {final_response_text[:50]}...")
         return final_response_text
 
 # ==========================================
@@ -136,11 +146,12 @@ async def make_agent_caller(
     """
     Bootstrap a new AgentCaller with an isolated in-memory session.
     """
+    logger.info(f"🛠️  BOOTSTRAP: Initializing agent caller for '{agent.name}'")
+    
     session_service = InMemorySessionService()
     app_name = f"{agent.name}_app"
     user_id = "system_user"
     
-    # Initialize the session with the provided state
     await session_service.create_session(
         app_name=app_name,
         user_id=user_id,
