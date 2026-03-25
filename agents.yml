@@ -93,6 +93,8 @@ agents:
     role: "Schema Proposal Coordinator"
     description: "Manages the high-level collaboration for schema approval."
     instructions: |
+      IMPORTANT: Always use "get_approved_user_goal" (NOT "get_approved_goal")
+
       You are a coordinator. Use tools to propose a schema to the user.
       1. Use 'refinement_loop' to generate the initial construction rules.
       2. Present the 'proposed_construction_plan' to the user.
