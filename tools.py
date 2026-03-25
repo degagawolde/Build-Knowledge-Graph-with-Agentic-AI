@@ -208,12 +208,12 @@ def propose_node_construction(
 
 def propose_relationship_construction(
     approved_file: str,
-    proposed_relationship_type: str,
+    relationship_type: str,
     from_node_label: str,
     from_node_column: str,
     to_node_label: str,
     to_node_column: str,
-    proposed_properties: list[str],
+    properties: list[str],
     tool_context: ToolContext
 ) -> dict:
     """Propose a relationship mapping for a structured file."""
@@ -224,18 +224,18 @@ def propose_relationship_construction(
             return tool_error(f"{approved_file} missing column '{col}'.")
 
     plan = tool_context.state.get(PROPOSED_CONSTRUCTION_PLAN, {})
-    plan[proposed_relationship_type] = {
+    plan[relationship_type] = {
         "construction_type": "relationship",
         "source_file": approved_file,
-        "relationship_type": proposed_relationship_type,
+        "relationship_type": relationship_type,
         "from_node_label": from_node_label,
         "from_node_column": from_node_column,
         "to_node_label": to_node_label,
         "to_node_column": to_node_column,
-        "properties": proposed_properties
+        "properties": properties
     }
     tool_context.state[PROPOSED_CONSTRUCTION_PLAN] = plan
-    return tool_success("relationship_construction", plan[proposed_relationship_type])
+    return tool_success("relationship_construction", plan[relationship_type])
 
 def get_proposed_construction_plan(tool_context: ToolContext):
     """Retrieve the proposed construction plan."""
