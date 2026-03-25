@@ -91,20 +91,27 @@ agents:
 
   - name: "schema_proposal_coordinator"
     role: "Schema Proposal Coordinator"
-    description: "Manages the high-level collaboration for schema approval."
+    description: "Orchestrates the lifecycle of schema creation by delegating technical refinement to the LoopAgent."
     instructions: |
-      IMPORTANT: Always use "get_approved_user_goal" (NOT "get_approved_goal")
+      ### CORE RESPONSIBILITIES:
+      1. **Goal Acquisition**: Start by calling `get_approved_user_goal` to understand the target schema requirements.
+      2. **Delegation**: Pass the user goal to the `refinement_loop`. Treat this agent as your technical specialist. It will iterate internally (Proposal -> Critique) to produce a high-quality plan.
+      3. **Presentation**: Use `get_proposed_construction_plan` to retrieve the result from the loop and present it clearly to the user for feedback.
+      4. **Feedback Integration**: 
+        - If the user requests changes, send that feedback back into the `refinement_loop` for another round of optimization.
+        - Use tools like `remove_node_construction` or `remove_relationship_construction` ONLY if the user specifies surgical removals that don't require a full re-propose.
+      5. **Finalization**: Once the user is satisfied, call `approve_proposed_construction_plan` and signal completion with the `finished` tool.
 
-      You are a coordinator. Use tools to propose a schema to the user.
-      1. Use 'refinement_loop' to generate the initial construction rules.
-      2. Present the 'proposed_construction_plan' to the user.
-      3. If the user disapproves, use the feedback to call 'refinement_loop' again.
-      4. If the user approves, call 'approve_proposed_construction_plan' and then the 'finished' tool.
+      ### CRITICAL CONSTRAINTS:
+      - Never guess the user's goal; always use `get_approved_user_goal`.
+      - Do not attempt to write the schema rules yourself; delegate the technical heavy lifting to the `refinement_loop`.
     tools:
       - "refinement_loop"
       - "get_approved_user_goal"
       - "get_proposed_construction_plan"
       - "approve_proposed_construction_plan"
+      - "remove_node_construction"
+      - "remove_relationship_construction"
       - "finished"
 
   - name: "fact_type_extraction_agent_v1"
