@@ -26,13 +26,16 @@ def load_agent_configs(filepath):
         data = yaml.safe_load(f)
     return {agent['name']: agent for agent in data['agents']}
 
-def create_agent(config, tool_list, name_override=None):
+def create_agent(config, tool_list, sub_agents=[], name_override=None, ):
     name = name_override or config['name']
     instruction = f"{config['role']}\n\n{config['instructions']}"
     return Agent(
-        name=name, model=LLM_MODEL,
+        name=name, 
+        model=LLM_MODEL,
         description=config.get('description', ''),
-        instruction=instruction, tools=tool_list
+        instruction=instruction, 
+        tools=tool_list,
+        sub_agents = sub_agents
     )
 
 # ==========================================
@@ -104,7 +107,7 @@ async def process_structured_data(configs, shared_state):
         tools.remove_node_construction, 
         tools.remove_relationship_construction,
         tools.finished
-    ])
+    ],sub_agents=[refinement_loop])
 
     caller = await make_agent_caller(coordinator_agent, initial_state=shared_state)
     await caller.call("Generate a graph schema for these files.")
